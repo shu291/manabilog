@@ -134,6 +134,43 @@ input,select,textarea{font-family:inherit;font-size:16px}
 .big-btn:hover{transform:scale(1.06)}
 .big-btn.sec{width:52px;height:52px;font-size:19px;background:var(--surface-2);color:var(--text);box-shadow:var(--shadow)}
 
+/* ===== FocusTube (作業用動画) ===== */
+.yt-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);margin-top:16px;overflow:hidden}
+.yt-head{display:flex;align-items:center;gap:10px;padding:16px 18px 12px}
+.yt-head .t{font-weight:800;font-size:15px;display:flex;align-items:center;gap:8px}
+.yt-head .hint{font-size:12px;color:var(--text-dim);margin-left:auto;text-align:right}
+.yt-tabs{display:flex;gap:7px;overflow-x:auto;padding:0 14px 12px;scrollbar-width:none}
+.yt-tabs::-webkit-scrollbar{display:none}
+.yt-tab{flex:0 0 auto;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);
+  border-radius:999px;padding:7px 13px;font-size:13px;font-weight:700;white-space:nowrap;transition:.15s;cursor:pointer}
+.yt-tab.active{background:var(--primary-soft);color:var(--primary-ink);border-color:transparent}
+.yt-tab.add{color:var(--primary-ink);border-style:dashed}
+.yt-player{background:#000;aspect-ratio:16/9;display:none}
+.yt-player iframe{width:100%;height:100%;display:block;border:0}
+.yt-search{display:none;gap:8px;padding:0 14px 12px}
+.yt-search input{flex:1;background:var(--surface-2);border:1.5px solid var(--border);color:var(--text);
+  border-radius:11px;padding:11px 13px;outline:none;font-size:15px}
+.yt-search input:focus{border-color:var(--primary)}
+.yt-search button{background:var(--primary);color:#fff;border:none;border-radius:11px;padding:0 16px;font-weight:700;cursor:pointer}
+.yt-list{padding:4px 14px 16px}
+.yt-item{display:flex;gap:11px;align-items:center;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:12px;padding:9px;margin-bottom:9px;cursor:pointer;position:relative;transition:.15s}
+.yt-item:hover{border-color:var(--primary)}
+.yt-item.playing{border-color:var(--primary);background:var(--primary-soft)}
+.yt-thumb{width:110px;min-width:110px;aspect-ratio:16/9;border-radius:8px;object-fit:cover;background:#000}
+.yt-meta{flex:1;min-width:0}
+.yt-title{font-size:13.5px;font-weight:700;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.yt-idx{font-size:11px;color:var(--text-dim);margin-top:5px;font-weight:700}
+.yt-item.playing .yt-idx{color:var(--primary-ink)}
+.yt-star{position:absolute;top:7px;right:7px;width:30px;height:30px;border-radius:8px;
+  background:var(--surface);border:1px solid var(--border);color:var(--text-dim);font-size:15px;display:grid;place-items:center}
+.yt-star.on{color:var(--warn);border-color:var(--warn)}
+.yt-status{padding:26px 16px;text-align:center;color:var(--text-dim);font-size:13.5px;line-height:1.9;display:none}
+.yt-status b{color:var(--text)}
+.yt-bigbtn{display:inline-block;margin-top:10px;background:var(--primary);color:#fff;border:none;
+  border-radius:11px;padding:11px 18px;font-weight:700;cursor:pointer}
+
 /* ===== Forms / Modal ===== */
 .modal-bg{position:fixed;inset:0;background:rgba(15,17,32,.55);backdrop-filter:blur(4px);z-index:100;
   display:none;align-items:flex-end;justify-content:center}
@@ -293,7 +330,8 @@ const DEFAULT = {
   tasks:[], sessions:[], theme:"light",
   goals:{ weeklyMin:600, bySubject:{} },
   settings:{ pomoFocus:25, pomoBreak:5 },
-  streak:{ last:null, count:0 }
+  streak:{ last:null, count:0 },
+  videos:{ playlists:[], favs:[], history:[] }
 };
 let S = load();
 
@@ -305,7 +343,8 @@ function load(){
     return {...structuredClone(DEFAULT), ...d,
       goals:{...DEFAULT.goals,...(d.goals||{})},
       settings:{...DEFAULT.settings,...(d.settings||{})},
-      streak:{...DEFAULT.streak,...(d.streak||{})}};
+      streak:{...DEFAULT.streak,...(d.streak||{})},
+      videos:{playlists:[],favs:[],history:[],...(d.videos||{})}};
   }catch(e){ return structuredClone(DEFAULT); }
 }
 function save(){ localStorage.setItem("manabilog", JSON.stringify(S)); }
@@ -588,7 +627,12 @@ function saveTask(id){
 /* ---------- Timer ---------- */
 let timer={running:false,mode:"pomo",phase:"focus",remain:25*60,total:25*60,subject:"math",int:null,elapsed:0};
 function renderTimer(){
-  const el=document.getElementById("view-timer");
+  const view=document.getElementById("view-timer");
+  if(!document.getElementById("timerZone")){
+    view.innerHTML='<div id="timerZone"></div><div id="ytZone"></div>';
+    initYTPanel();                       // 動画パネルは一度だけ構築（プレーヤーを保持）
+  }
+  const el=document.getElementById("timerZone");
   const p=S.settings;
   el.innerHTML=`
     <div class="card">
@@ -724,6 +768,262 @@ function beep(){
     o.start(); o.stop(a.currentTime+.5);
   }catch(e){}
 }
+
+/* ============================================================
+   FocusTube — 作業用YouTube動画（タイマー画面に統合）
+   教科=再生リスト / お気に入り / 検索 / 履歴
+   ============================================================ */
+const YK = { key:"manabilog_ytkey", cache:"manabilog_ytcache_" };
+let ytKey = localStorage.getItem(YK.key) || "";
+let yt = { player:null, apiReady:false, pending:null, loading:false, list:[], idx:-1, ctx:"", playingCtx:"",
+  tab:(S.videos.playlists[0] ? S.videos.playlists[0].id : "fav") };
+
+function loadYTApi(){
+  if(window.YT && window.YT.Player){ yt.apiReady=true; return; }
+  if(yt.loading) return; yt.loading=true;
+  window.onYouTubeIframeAPIReady=()=>{ yt.apiReady=true; if(yt.pending){const f=yt.pending;yt.pending=null;f();} };
+  const tag=document.createElement("script"); tag.src="https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+}
+function ensureYTPlayer(cb){
+  if(yt.player){ cb&&cb(); return; }
+  loadYTApi();
+  if(!yt.apiReady){ yt.pending=()=>ensureYTPlayer(cb); return; }
+  yt.player=new YT.Player("ytPlayerHost",{
+    playerVars:{ rel:0, playsinline:1, iv_load_policy:3 },
+    events:{ onReady:()=>cb&&cb(), onStateChange:ytOnState }
+  });
+}
+function ytOnState(e){
+  if(e.data===YT.PlayerState.PLAYING){
+    try{ const m=yt.player.getVideoUrl().match(/[?&]v=([A-Za-z0-9_-]+)/);
+      if(m){ const i=yt.list.findIndex(x=>x.id===m[1]); if(i!==-1&&i!==yt.idx){ yt.idx=i; yt.playingCtx=yt.ctx; updateYTPlaying(); } } }catch(_){}
+  }
+  if(e.data===YT.PlayerState.ENDED && yt.idx>-1 && yt.idx<yt.list.length-1) ytPlayAt(yt.idx+1,false);
+}
+
+function initYTPanel(){
+  loadYTApi();
+  const z=document.getElementById("ytZone");
+  z.innerHTML=`
+    <div class="yt-card">
+      <div class="yt-head"><span class="t">📺 作業用の動画</span>
+        <span class="hint">勉強しながらBGM・解説を再生</span></div>
+      <div class="yt-tabs" id="ytTabs"></div>
+      <div class="yt-search" id="ytSearch">
+        <input id="ytSearchInput" type="search" placeholder="例：二次関数 解説 / 英語 リスニング" enterkeyhint="search">
+        <button id="ytSearchGo">検索</button>
+      </div>
+      <div class="yt-player" id="ytPlayerWrap"><div id="ytPlayerHost"></div></div>
+      <div class="yt-list"><div class="yt-status" id="ytStatus"></div><div id="ytList"></div></div>
+    </div>`;
+  document.getElementById("ytSearchGo").onclick=()=>ytRunSearch(document.getElementById("ytSearchInput").value);
+  document.getElementById("ytSearchInput").addEventListener("keydown",e=>{ if(e.key==="Enter") ytRunSearch(e.target.value); });
+  renderYTTabs();
+  ytSelectTab(yt.tab);
+}
+function renderYTTabs(){
+  const t=document.getElementById("ytTabs"); if(!t) return; t.innerHTML="";
+  const add=(label,key,cls="")=>{
+    const b=document.createElement("button");
+    b.className="yt-tab "+cls+(yt.tab===key?" active":""); b.innerHTML=label;
+    b.onclick=()=>{ if(yt.tab===key && S.videos.playlists.some(s=>s.id===key)) ytEditPlaylist(key); else ytSelectTab(key); };
+    t.appendChild(b);
+  };
+  add("★ お気に入り","fav");
+  S.videos.playlists.forEach(s=> add(esc(s.name), s.id));
+  if(S.videos.history.length) add("🕘 履歴","history");
+  if(ytKey) add("🔍 検索","search");
+  const plus=document.createElement("button"); plus.className="yt-tab add"; plus.textContent="＋ 教科";
+  plus.onclick=ytAddPlaylistModal; t.appendChild(plus);
+  const gear=document.createElement("button"); gear.className="yt-tab"; gear.textContent="🔑"; gear.title="検索キー";
+  gear.onclick=ytKeyModal; t.appendChild(gear);
+}
+function ytSelectTab(key){
+  yt.tab=key; renderYTTabs();
+  document.getElementById("ytSearch").style.display = key==="search" ? "flex" : "none";
+  if(key==="fav") ytShowFav();
+  else if(key==="history") ytShowHistory();
+  else if(key==="search") ytShowSearchHome();
+  else ytShowPlaylist(key);
+}
+function ytShowFav(){
+  ytHideStatus();
+  if(!S.videos.favs.length){ document.getElementById("ytList").innerHTML="";
+    ytStatus("お気に入りがまだありません。<br>勉強になった動画のURLを貼って貯めよう。","＋ 動画を追加",ytAddFavModal); return; }
+  yt.ctx="fav"; yt.list=S.videos.favs.slice(); renderYTList();
+  ytAppendBtn("＋ 動画を追加",ytAddFavModal);
+}
+function ytShowPlaylist(id){
+  const s=S.videos.playlists.find(x=>x.id===id);
+  if(!s){ ytSelectTab("fav"); return; }
+  yt.ctx=id;
+  let cached=null; try{ cached=JSON.parse(localStorage.getItem(YK.cache+s.pl)||"null"); }catch(_){}
+  if(cached && cached.ids && cached.ids.length){
+    yt.list=cached.ids.map(vid=>({id:vid,title:(cached.titles||{})[vid]||""})); renderYTList(); ytHideStatus();
+  }else{ document.getElementById("ytList").innerHTML=""; ytStatus("「"+esc(s.name)+"」を読み込み中…"); }
+  ytLoadPlaylist(s);
+}
+function ytLoadPlaylist(s){
+  ensureYTPlayer(()=>{
+    try{ yt.player.cuePlaylist({listType:"playlist",list:s.pl}); }catch(_){}
+    let tries=0;
+    const poll=()=>{
+      if(yt.ctx!==s.id) return;
+      let ids=null; try{ ids=yt.player.getPlaylist(); }catch(_){}
+      if(ids&&ids.length){
+        yt.list=ids.map(vid=>({id:vid,title:""})); renderYTList(); ytHideStatus();
+        ytFetchTitles(s.pl,ids); return;
+      }
+      if(tries++>60){ ytStatus("読み込めませんでした😢<br>再生リストが「非公開」になっていないか確認してね。","URLを入れ直す",()=>ytEditPlaylist(s.id)); return; }
+      setTimeout(poll,250);
+    };
+    poll();
+  });
+}
+async function ytFetchTitles(pl,ids){
+  const titles={};
+  await Promise.all(ids.map(async id=>{ try{ const r=await fetch("https://noembed.com/embed?url=https://www.youtube.com/watch?v="+id); const j=await r.json(); if(j.title) titles[id]=j.title; }catch(_){} }));
+  try{ localStorage.setItem(YK.cache+pl,JSON.stringify({ids,titles})); }catch(_){}
+  const s=S.videos.playlists.find(x=>x.pl===pl);
+  if(s && yt.ctx===s.id){ yt.list=ids.map(vid=>({id:vid,title:titles[vid]||""})); renderYTList(); }
+}
+function ytShowSearchHome(){
+  yt.ctx="search"; document.getElementById("ytList").innerHTML="";
+  ytStatus("上の検索バーにキーワードを入れて検索しよう。<br>例：「化学 モル 計算」「日本史 明治維新」");
+}
+async function ytRunSearch(q){
+  q=(q||"").trim(); if(!q) return; yt.ctx="search";
+  document.getElementById("ytList").innerHTML=""; ytStatus("「"+esc(q)+"」を検索中…");
+  const url="https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=25&safeSearch=strict&videoEmbeddable=true&relevanceLanguage=ja&regionCode=JP&q="+encodeURIComponent(q)+"&key="+encodeURIComponent(ytKey);
+  try{
+    const r=await fetch(url); const j=await r.json();
+    if(j.error){ const reason=(j.error.errors&&j.error.errors[0]&&j.error.errors[0].reason)||"";
+      if(reason==="quotaExceeded") ytStatus("今日の無料検索の上限に達しました。<br>明日また使えます🙏");
+      else ytStatus("検索できませんでした。APIキーを確認してね。","キーを確認",ytKeyModal);
+      return; }
+    const items=(j.items||[]).map(it=>({id:it.id.videoId,title:it.snippet.title}));
+    if(!items.length){ ytStatus("結果が見つかりませんでした。"); return; }
+    yt.list=items; renderYTList(); ytHideStatus();
+  }catch(e){ ytStatus("通信に失敗しました。電波を確認してね。"); }
+}
+function ytShowHistory(){
+  ytHideStatus(); yt.ctx="history";
+  if(!S.videos.history.length){ document.getElementById("ytList").innerHTML=""; ytStatus("まだ再生した動画がありません。"); return; }
+  yt.list=S.videos.history.map(h=>({id:h.id,title:h.title})); renderYTList();
+  ytAppendBtn("🗑 履歴を消す",()=>{ S.videos.history=[]; save(); renderYTTabs(); ytSelectTab("fav"); },true);
+}
+function renderYTList(){
+  const list=document.getElementById("ytList"); if(!list) return; list.innerHTML="";
+  yt.list.forEach((v,i)=>{
+    const el=document.createElement("div"); const on=(i===yt.idx&&yt.ctx===yt.playingCtx);
+    el.className="yt-item"+(on?" playing":""); el.dataset.idx=i;
+    const t=v.title||"動画 "+(i+1); const faved=ytIsFav(v.id);
+    el.innerHTML=`<img class="yt-thumb" loading="lazy" src="https://i.ytimg.com/vi/${v.id}/mqdefault.jpg">
+      <div class="yt-meta"><div class="yt-title">${esc(t)}</div><div class="yt-idx">${on?"▶ 再生中":"#"+(i+1)}</div></div>
+      <div class="yt-star${faved?" on":""}" data-star="${i}">${faved?"★":"☆"}</div>`;
+    el.onclick=e=>{ if(e.target.dataset.star!==undefined){ ytToggleFav(v); e.stopPropagation(); return; } ytPlayAt(i); };
+    list.appendChild(el);
+  });
+}
+function ytAppendBtn(label,fn,danger){
+  const b=document.createElement("button"); b.className="yt-bigbtn"; b.style.width="100%";
+  if(danger){ b.style.background="transparent"; b.style.color="var(--danger)"; b.style.border="1px solid var(--border)"; }
+  b.textContent=label; b.onclick=fn; document.getElementById("ytList").appendChild(b);
+}
+function ytPlayAt(i,scroll){
+  if(i<0||i>=yt.list.length) return;
+  yt.idx=i; yt.playingCtx=yt.ctx; ytPushHistory(yt.list[i]);
+  document.getElementById("ytPlayerWrap").style.display="block";   // 押した瞬間に再生エリアを表示
+  ensureYTPlayer(()=>{ yt.player.loadVideoById(yt.list[i].id); });
+  updateYTPlaying();
+  if(scroll!==false){ const w=document.getElementById("ytPlayerWrap"); if(w) w.scrollIntoView({behavior:"smooth",block:"center"}); }
+}
+function updateYTPlaying(){
+  document.querySelectorAll("#ytList .yt-item").forEach(el=>{
+    const i=+el.dataset.idx; const on=(i===yt.idx&&yt.ctx===yt.playingCtx);
+    el.classList.toggle("playing",on);
+    const idx=el.querySelector(".yt-idx"); if(idx) idx.textContent=on?"▶ 再生中":"#"+(i+1);
+  });
+}
+function ytIsFav(id){ return S.videos.favs.some(f=>f.id===id); }
+function ytToggleFav(v){
+  if(ytIsFav(v.id)) S.videos.favs=S.videos.favs.filter(f=>f.id!==v.id);
+  else { S.videos.favs.unshift({id:v.id,title:v.title||""}); if(!v.title) ytFetchFavTitle(v.id); }
+  save(); if(yt.ctx==="fav") ytShowFav(); else renderYTList();
+}
+async function ytFetchFavTitle(id){
+  try{ const r=await fetch("https://noembed.com/embed?url=https://www.youtube.com/watch?v="+id); const j=await r.json();
+    if(j.title){ const f=S.videos.favs.find(x=>x.id===id); if(f){ f.title=j.title; save(); if(yt.ctx==="fav") ytShowFav(); } } }catch(_){}
+}
+function ytPushHistory(v){
+  if(!v||!v.id) return;
+  S.videos.history=S.videos.history.filter(h=>h.id!==v.id);
+  S.videos.history.unshift({id:v.id,title:v.title||"",ts:Date.now()});
+  if(S.videos.history.length>40) S.videos.history.length=40;
+  save(); if(yt.tab!=="history") renderYTTabs();
+}
+function ytAddPlaylistModal(){
+  openModal(`<h3>教科（再生リスト）を追加</h3>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">YouTubeで勉強用の再生リストを開き「共有 → リンクをコピー」して貼り付け。<br>※公開／限定公開のリストのみ再生できます。</p>
+    <div class="field"><label>教科名</label><input id="yp-name" placeholder="例：数学" maxlength="20"></div>
+    <div class="field"><label>再生リストのURL</label><input id="yp-url" placeholder="https://www.youtube.com/playlist?list=..."></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">やめる</button>
+    <button class="btn primary" onclick="ytSavePlaylist()">追加</button></div>`);
+  setTimeout(()=>document.getElementById("yp-name").focus(),100);
+}
+function ytSavePlaylist(){
+  const name=document.getElementById("yp-name").value.trim();
+  const pl=extractPl(document.getElementById("yp-url").value);
+  if(!name){ toast("教科名を入れてください"); return; }
+  if(!pl){ toast("再生リストのURL（list= を含む）を貼ってください"); return; }
+  const id="p"+uid(); S.videos.playlists.push({id,name,pl}); save();
+  closeModal(); renderYTTabs(); ytSelectTab(id);
+}
+function ytEditPlaylist(id){
+  const s=S.videos.playlists.find(x=>x.id===id); if(!s) return;
+  confirmModal("「"+esc(s.name)+"」を削除しますか？","この教科タブを削除します（お気に入りや他の教科は消えません）。",()=>{
+    S.videos.playlists=S.videos.playlists.filter(x=>x.id!==id);
+    try{ localStorage.removeItem(YK.cache+s.pl); }catch(_){}
+    save(); yt.tab=S.videos.playlists[0]?S.videos.playlists[0].id:"fav"; renderYTTabs(); ytSelectTab(yt.tab);
+  });
+}
+function ytAddFavModal(){
+  openModal(`<h3>お気に入りに動画を追加</h3>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">勉強になった動画のURLを貼り付け。1本ずつ貯められます。</p>
+    <div class="field"><label>動画のURL</label><input id="yf-url" placeholder="https://www.youtube.com/watch?v=..."></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">やめる</button>
+    <button class="btn primary" onclick="ytSaveFav()">追加</button></div>`);
+  setTimeout(()=>document.getElementById("yf-url").focus(),100);
+}
+function ytSaveFav(){
+  const id=extractVid(document.getElementById("yf-url").value);
+  if(!id){ toast("動画のURL（v= か youtu.be/）を貼ってください"); return; }
+  if(ytIsFav(id)){ toast("もう追加済みです"); return; }
+  S.videos.favs.unshift({id,title:""}); save(); ytFetchFavTitle(id);
+  closeModal(); if(yt.tab!=="fav") ytSelectTab("fav"); else ytShowFav();
+}
+function ytKeyModal(){
+  openModal(`<h3>YouTube内を検索（無料・任意）</h3>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:14px">検索タブを使いたい時だけ設定します。<a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--primary-ink)">Google Cloud</a> で「YouTube Data API v3」を有効化 → APIキーを作成。キーはこの端末だけに保存され、外部に送りません。</p>
+    <div class="field"><label>YouTube APIキー</label><input id="yk-key" value="${esc(ytKey)}" placeholder="AIza..."></div>
+    <div class="modal-actions">${ytKey?`<button class="btn danger" onclick="ytDelKey()">削除</button>`:""}
+    <button class="btn" onclick="closeModal()">閉じる</button>
+    <button class="btn primary" onclick="ytSaveKey()">保存</button></div>`);
+}
+function ytSaveKey(){
+  const v=document.getElementById("yk-key").value.trim();
+  if(!v){ toast("APIキーを入れてください"); return; }
+  ytKey=v; localStorage.setItem(YK.key,v); closeModal(); renderYTTabs(); ytSelectTab("search");
+}
+function ytDelKey(){ ytKey=""; localStorage.removeItem(YK.key); closeModal(); renderYTTabs(); if(yt.tab==="search") ytSelectTab("fav"); }
+function ytStatus(msg,btnLabel,btnFn){
+  const s=document.getElementById("ytStatus"); if(!s) return; s.style.display="block"; s.innerHTML=msg;
+  if(btnLabel){ const b=document.createElement("button"); b.className="yt-bigbtn"; b.textContent=btnLabel; b.onclick=btnFn; s.appendChild(document.createElement("br")); s.appendChild(b); }
+}
+function ytHideStatus(){ const s=document.getElementById("ytStatus"); if(s) s.style.display="none"; }
+function extractPl(input){ input=(input||"").trim(); const m=input.match(/[?&]list=([A-Za-z0-9_-]+)/); if(m) return m[1]; if(/^(PL|UU|LL|OL|RD|FL)[A-Za-z0-9_-]{8,}$/.test(input)) return input; return null; }
+function extractVid(input){ input=(input||"").trim(); let m=input.match(/[?&]v=([A-Za-z0-9_-]{11})/); if(m) return m[1]; m=input.match(/youtu\.be\/([A-Za-z0-9_-]{11})/); if(m) return m[1]; m=input.match(/\/(shorts|embed)\/([A-Za-z0-9_-]{11})/); if(m) return m[2]; if(/^[A-Za-z0-9_-]{11}$/.test(input)) return input; return null; }
 
 /* ---------- Manual log ---------- */
 function openLogModal(){
@@ -914,7 +1214,9 @@ function importData(e){
   r.onload=()=>{ try{ const d=JSON.parse(r.result);
     if(!d.tasks&&!d.sessions) throw 0;
     confirmModal("データを読み込みますか？","現在のデータは上書きされます。",()=>{
-      S={...structuredClone(DEFAULT),...d}; save(); applyTheme(); nav("dash"); toast("読み込みました");
+      S={...structuredClone(DEFAULT),...d};
+      S.videos={playlists:[],favs:[],history:[],...(d.videos||{})};
+      save(); applyTheme(); nav("dash"); toast("読み込みました");
     });
   }catch(err){ toast("ファイルを読み込めませんでした"); } };
   r.readAsText(f); e.target.value="";
