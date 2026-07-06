@@ -628,8 +628,7 @@ function saveTask(id){
 let timer={running:false,mode:"pomo",phase:"focus",remain:25*60,total:25*60,subject:"math",int:null,elapsed:0};
 /* 勉強画面：動画を再生している間、選んだ教科に自動で勉強時間を記録（FocusTube方式） */
 let studySubject = localStorage.getItem("manabilog_studysubj") || "math";
-let watchInt = null;
-let lastDashMin = -1;
+let manualOn=false, videoPlaying=false, recInt=null, recAnchor=0, lastShownMin=-1;
 
 function renderStudy(){
   const view=document.getElementById("view-timer");
@@ -644,23 +643,25 @@ function renderStudy(){
       <div style="text-align:center">
         <div style="font-size:13px;color:var(--text-dim);font-weight:700">今日の勉強時間</div>
         <div id="studyClock" style="font-size:46px;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:2px 0">${minToHM(m)||'0分'}</div>
-        <div style="font-size:13px;color:var(--text-dim)"><span id="watchState">${watchInt?'🔴 記録中':'● 停止中'}</span> ・ 🔥 ${currentStreak()}日連続</div>
+        <div style="font-size:13px;color:var(--text-dim)"><span id="watchState">${recInt?'🔴 記録中':'● 停止中'}</span> ・ 🔥 ${currentStreak()}日連続</div>
       </div>
-      <div style="margin-top:18px">
+      <div style="margin-top:16px">
         <div style="font-size:12px;color:var(--text-dim);font-weight:700;margin-bottom:8px;text-align:center">勉強する教科（記録先）</div>
         <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:center" id="studySubjChips">
           ${SUBJECTS.map(s=>`<button class="chip ${studySubject===s.id?'active':''}" data-s="${s.id}" onclick="setStudySubject('${s.id}')">${s.name}</button>`).join("")}
         </div>
       </div>
-      <div style="margin-top:16px;font-size:12.5px;color:var(--text-dim);background:var(--surface-2);padding:11px 14px;border-radius:12px;line-height:1.7">
-        💡 上の動画を再生している間、選んだ教科に<b>自動で勉強時間が記録</b>されます。
+      <button id="recBtn" class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:15px;font-size:16px" onclick="toggleManual()"></button>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-dim);background:var(--surface-2);padding:10px 13px;border-radius:12px;line-height:1.7;text-align:center">
+        「勉強スタート」を押すか、上の動画を再生すると<b>自動で時間が記録</b>されます。
       </div>
-      <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:10px" onclick="openLogModal()">✏️ 動画なしの分を手動で追加</button>
+      <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:10px" onclick="openLogModal()">✏️ あとから時間を手動で追加</button>
     </div>
     <div class="card" style="margin-top:16px">
       <div class="section-title">今日の記録 <span class="badge" id="studyBadge">${minToHM(m)||'0分'}</span></div>
       <div id="studyTodayBody">${todaySessionList()}</div>
     </div>`;
+  renderRecBtn();
 }
 function setStudySubject(id){
   studySubject=id; localStorage.setItem("manabilog_studysubj",id);
@@ -672,31 +673,43 @@ function renderStudyToday(){
   const badge=document.getElementById("studyBadge"); if(badge) badge.textContent=txt;
   const body=document.getElementById("studyTodayBody"); if(body) body.innerHTML=todaySessionList();
 }
-/* --- 学習クロック：プレーヤーが再生中の間だけ加算 --- */
-function startWatchClock(){
-  if(watchInt) return;
-  watchInt=setInterval(()=>addWatch(5),5000);
-  const ws=document.getElementById("watchState"); if(ws) ws.textContent="🔴 記録中";
+function renderRecBtn(){
+  const b=document.getElementById("recBtn"); if(!b) return;
+  if(manualOn){ b.textContent="⏹ 記録を止める"; b.classList.remove("primary"); b.style.background="var(--danger)"; b.style.color="#fff"; }
+  else { b.textContent="▶ 勉強スタート"; b.classList.add("primary"); b.style.background=""; b.style.color=""; }
 }
-function stopWatchClock(){
-  if(watchInt){ clearInterval(watchInt); watchInt=null; }
-  const ws=document.getElementById("watchState"); if(ws) ws.textContent="● 停止中";
+/* --- 記録エンジン：手動ボタン or 動画再生中に加算（重複しない単一クロック） --- */
+function toggleManual(){
+  manualOn=!manualOn; renderRecBtn(); syncRecording();
+  toast(manualOn?"⏺ 記録を始めました":"⏹ 記録を止めました");
 }
+function setVideoPlaying(on){ videoPlaying=on; syncRecording(); }
+function syncRecording(){
+  const should = manualOn || videoPlaying;
+  if(should && !recInt){ recAnchor=Date.now(); recInt=setInterval(flushRec,1000); }
+  else if(!should && recInt){ flushRec(); clearInterval(recInt); recInt=null; }
+  const ws=document.getElementById("watchState"); if(ws) ws.textContent = recInt?"🔴 記録中":"● 停止中";
+}
+function flushRec(){ const now=Date.now(); const sec=(now-recAnchor)/1000; recAnchor=now; if(sec>0) addWatch(sec); }
 function addWatch(sec){
   const k=todayKey();
-  let s=S.sessions.find(x=>x.date===k && x.subject===studySubject && x.mode==="video");
-  if(!s){ s={id:uid(),date:k,subject:studySubject,min:0,sec:0,mode:"video",at:Date.now()}; S.sessions.push(s); }
+  let s=S.sessions.find(x=>x.date===k && x.subject===studySubject && x.mode==="study");
+  if(!s){ s={id:uid(),date:k,subject:studySubject,min:0,sec:0,mode:"study",at:Date.now()}; S.sessions.push(s); }
   s.sec=(s.sec||Math.round((s.min||0)*60))+sec;   // 秒で正確に積み上げ、分は端数込みで保持
   s.min=s.sec/60;
   bumpStreak(); save();
-  if(current==="timer") renderStudyToday();
-  else if(current==="dash"){ const now=Math.floor(minutesOn(k)); if(now!==lastDashMin){ lastDashMin=now; renderDash(); } }
+  const nowMin=Math.floor(minutesOn(k));
+  if(nowMin!==lastShownMin){                        // 分が変わった時だけ再描画（軽量）
+    lastShownMin=nowMin;
+    if(current==="timer") renderStudyToday();
+    else if(current==="dash") renderDash();
+  }
 }
 function todaySessionList(){
   const list=S.sessions.filter(s=>s.date===todayKey()).sort((a,b)=>(b.at||0)-(a.at||0));
   if(!list.length) return `<div class="empty" style="padding:26px"><div class="em">🌿</div>まだ記録がありません</div>`;
   return list.map(s=>{const sj=subj(s.subject);
-    const label=s.mode==='video'?'📺 動画':s.mode==='manual'?'✏️ 手動':s.mode==='pomo'?'🍅 ポモドーロ':'⏱️ 計測';
+    const label=s.mode==='study'?'📚 勉強':s.mode==='video'?'📺 動画':s.mode==='manual'?'✏️ 手動':s.mode==='pomo'?'🍅 ポモドーロ':'⏱️ 計測';
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
       <span class="tag" style="background:${sj.color}22;color:${sj.color}">${sj.name}</span>
       <span style="flex:1;font-size:13px;color:var(--text-dim)">${label}</span>
@@ -732,7 +745,7 @@ function ensureYTPlayer(cb){
   });
 }
 function ytOnState(e){
-  if(e.data===YT.PlayerState.PLAYING) startWatchClock(); else stopWatchClock();
+  setVideoPlaying(e.data===YT.PlayerState.PLAYING);
   if(e.data===YT.PlayerState.PLAYING){
     try{ const m=yt.player.getVideoUrl().match(/[?&]v=([A-Za-z0-9_-]+)/);
       if(m){ const i=yt.list.findIndex(x=>x.id===m[1]); if(i!==-1&&i!==yt.idx){ yt.idx=i; yt.playingCtx=yt.ctx; updateYTPlaying(); } } }catch(_){}
