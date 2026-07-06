@@ -257,7 +257,7 @@ input,select,textarea{font-family:inherit;font-size:16px}
     <div class="brand"><div class="logo">📚</div><span>まなびログ</span></div>
     <button class="nav-btn active" data-nav="dash"><span class="ic">🏠</span>ホーム</button>
     <button class="nav-btn" data-nav="tasks"><span class="ic">✅</span>課題</button>
-    <button class="nav-btn" data-nav="timer"><span class="ic">⏱️</span>タイマー</button>
+    <button class="nav-btn" data-nav="timer"><span class="ic">📺</span>勉強</button>
     <button class="nav-btn" data-nav="goals"><span class="ic">🎯</span>目標</button>
     <button class="nav-btn" data-nav="stats"><span class="ic">📊</span>統計</button>
     <div class="spacer"></div>
@@ -294,7 +294,7 @@ input,select,textarea{font-family:inherit;font-size:16px}
 <nav class="bottom-nav">
   <button class="active" data-nav="dash"><span class="ic">🏠</span>ホーム</button>
   <button data-nav="tasks"><span class="ic">✅</span>課題</button>
-  <button data-nav="timer"><span class="ic">⏱️</span>タイマー</button>
+  <button data-nav="timer"><span class="ic">📺</span>勉強</button>
   <button data-nav="stats"><span class="ic">📊</span>統計</button>
   <button data-nav="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
@@ -376,7 +376,7 @@ function applyTheme(){
 document.getElementById("themeBtn").onclick=()=>{ S.theme = S.theme==="dark"?"light":"dark"; save(); applyTheme(); };
 
 /* ---------- Navigation ---------- */
-const TITLES = {dash:["ホーム",""],tasks:["課題",""],timer:["タイマー",""],goals:["目標",""],stats:["統計",""],settings:["設定",""]};
+const TITLES = {dash:["ホーム",""],tasks:["課題",""],timer:["勉強",""],goals:["目標",""],stats:["統計",""],settings:["設定",""]};
 let current="dash";
 function nav(v){
   current=v;
@@ -425,7 +425,7 @@ function subjectMinutes(days=7){
    RENDER
    ============================================================ */
 function render(v){
-  ({dash:renderDash,tasks:renderTasks,timer:renderTimer,goals:renderGoals,stats:renderStats,settings:renderSettings}[v])();
+  ({dash:renderDash,tasks:renderTasks,timer:renderStudy,goals:renderGoals,stats:renderStats,settings:renderSettings}[v])();
 }
 
 /* ---------- Dashboard ---------- */
@@ -476,7 +476,7 @@ function renderDash(){
     <div class="card" style="margin-top:16px">
       <div class="section-title">クイックスタート</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn primary" onclick="nav('timer')">⏱️ 勉強を始める</button>
+        <button class="btn primary" onclick="nav('timer')">📺 動画で勉強する</button>
         <button class="btn" onclick="openTaskModal()">＋ 課題を追加</button>
         <button class="btn" onclick="openLogModal()">✏️ 記録を手動追加</button>
       </div>
@@ -626,148 +626,85 @@ function saveTask(id){
 
 /* ---------- Timer ---------- */
 let timer={running:false,mode:"pomo",phase:"focus",remain:25*60,total:25*60,subject:"math",int:null,elapsed:0};
-function renderTimer(){
+/* 勉強画面：動画を再生している間、選んだ教科に自動で勉強時間を記録（FocusTube方式） */
+let studySubject = localStorage.getItem("manabilog_studysubj") || "math";
+let watchInt = null;
+let lastDashMin = -1;
+
+function renderStudy(){
   const view=document.getElementById("view-timer");
   if(!document.getElementById("timerZone")){
     view.innerHTML='<div id="timerZone"></div><div id="ytZone"></div>';
     initYTPanel();                       // 動画パネルは一度だけ構築（プレーヤーを保持）
   }
   const el=document.getElementById("timerZone");
-  const p=S.settings;
+  const m=minutesOn(todayKey());
   el.innerHTML=`
     <div class="card">
-      <div class="timer-modes seg" id="tmode" style="max-width:340px;margin:0 auto 6px">
-        <button data-v="pomo" class="${timer.mode==='pomo'?'on':''}" style="${timer.mode==='pomo'?'background:var(--primary)':''}">ポモドーロ</button>
-        <button data-v="free" class="${timer.mode==='free'?'on':''}" style="${timer.mode==='free'?'background:var(--primary)':''}">ストップウォッチ</button>
+      <div style="text-align:center">
+        <div style="font-size:13px;color:var(--text-dim);font-weight:700">今日の勉強時間</div>
+        <div id="studyClock" style="font-size:46px;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:2px 0">${minToHM(m)||'0分'}</div>
+        <div style="font-size:13px;color:var(--text-dim)"><span id="watchState">${watchInt?'🔴 記録中':'● 停止中'}</span> ・ 🔥 ${currentStreak()}日連続</div>
       </div>
-      <div class="timer-wrap">
-        <div class="ring">
-          <svg width="100%" height="100%" viewBox="0 0 240 240">
-            <circle cx="120" cy="120" r="110" fill="none" stroke="var(--surface-2)" stroke-width="14"/>
-            <circle id="ringFg" cx="120" cy="120" r="110" fill="none" stroke="url(#g)" stroke-width="14"
-              stroke-linecap="round" stroke-dasharray="${2*Math.PI*110}" stroke-dashoffset="0"/>
-            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="var(--s1)"/><stop offset="1" stop-color="var(--s2)"/></linearGradient></defs>
-          </svg>
-          <div class="time">
-            <div class="mode" id="tPhase">${timer.mode==='pomo'?(timer.phase==='focus'?'集中':'休憩'):'計測中'}</div>
-            <div class="big" id="tDisp">${fmtClock(timer.mode==='free'?timer.elapsed:timer.remain)}</div>
-            <div style="font-size:12px;color:var(--text-dim);margin-top:2px" id="tSubj">${subj(timer.subject).name}</div>
-          </div>
+      <div style="margin-top:18px">
+        <div style="font-size:12px;color:var(--text-dim);font-weight:700;margin-bottom:8px;text-align:center">勉強する教科（記録先）</div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:center" id="studySubjChips">
+          ${SUBJECTS.map(s=>`<button class="chip ${studySubject===s.id?'active':''}" data-s="${s.id}" onclick="setStudySubject('${s.id}')">${s.name}</button>`).join("")}
         </div>
-        <div class="timer-ctrl">
-          <button class="big-btn sec" onclick="resetTimer()" title="リセット">↺</button>
-          <button class="big-btn" id="tPlay" onclick="toggleTimer()">${timer.running?'⏸':'▶'}</button>
-          <button class="big-btn sec" onclick="stopAndLog()" title="終了して記録">⏹</button>
-        </div>
-        <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:center;max-width:380px">
-          ${SUBJECTS.map(s=>`<button class="chip ${timer.subject===s.id?'active':''}" onclick="setTimerSubject('${s.id}')">${s.name}</button>`).join("")}
-        </div>
-        ${timer.mode==='pomo'?`<div style="font-size:12px;color:var(--text-dim)">集中${p.pomoFocus}分 / 休憩${p.pomoBreak}分</div>`:''}
       </div>
+      <div style="margin-top:16px;font-size:12.5px;color:var(--text-dim);background:var(--surface-2);padding:11px 14px;border-radius:12px;line-height:1.7">
+        💡 下の動画を再生している間、選んだ教科に<b>自動で勉強時間が記録</b>されます。
+      </div>
+      <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:10px" onclick="openLogModal()">✏️ 動画なしの分を手動で追加</button>
     </div>
     <div class="card" style="margin-top:16px">
-      <div class="section-title">今日の記録 <span class="badge">${minToHM(minutesOn(todayKey()))||'0分'}</span></div>
-      ${todaySessionList()}
+      <div class="section-title">今日の記録 <span class="badge" id="studyBadge">${minToHM(m)||'0分'}</span></div>
+      <div id="studyTodayBody">${todaySessionList()}</div>
     </div>`;
-  const box=document.getElementById("tmode");
-  box.querySelectorAll("button").forEach(b=>b.onclick=()=>{ if(timer.running){toast("停止してから切り替えてください");return;} timer.mode=b.dataset.v; resetTimer(); });
-  updateRing();
+}
+function setStudySubject(id){
+  studySubject=id; localStorage.setItem("manabilog_studysubj",id);
+  document.querySelectorAll("#studySubjChips .chip").forEach(c=>c.classList.toggle("active",c.dataset.s===id));
+}
+function renderStudyToday(){
+  const m=minutesOn(todayKey()), txt=minToHM(m)||'0分';
+  const clk=document.getElementById("studyClock"); if(clk) clk.textContent=txt;
+  const badge=document.getElementById("studyBadge"); if(badge) badge.textContent=txt;
+  const body=document.getElementById("studyTodayBody"); if(body) body.innerHTML=todaySessionList();
+}
+/* --- 学習クロック：プレーヤーが再生中の間だけ加算 --- */
+function startWatchClock(){
+  if(watchInt) return;
+  watchInt=setInterval(()=>addWatch(5),5000);
+  const ws=document.getElementById("watchState"); if(ws) ws.textContent="🔴 記録中";
+}
+function stopWatchClock(){
+  if(watchInt){ clearInterval(watchInt); watchInt=null; }
+  const ws=document.getElementById("watchState"); if(ws) ws.textContent="● 停止中";
+}
+function addWatch(sec){
+  const k=todayKey();
+  let s=S.sessions.find(x=>x.date===k && x.subject===studySubject && x.mode==="video");
+  if(!s){ s={id:uid(),date:k,subject:studySubject,min:0,sec:0,mode:"video",at:Date.now()}; S.sessions.push(s); }
+  s.sec=(s.sec||Math.round((s.min||0)*60))+sec;   // 秒で正確に積み上げ、分は端数込みで保持
+  s.min=s.sec/60;
+  bumpStreak(); save();
+  if(current==="timer") renderStudyToday();
+  else if(current==="dash"){ const now=Math.floor(minutesOn(k)); if(now!==lastDashMin){ lastDashMin=now; renderDash(); } }
 }
 function todaySessionList(){
   const list=S.sessions.filter(s=>s.date===todayKey()).sort((a,b)=>(b.at||0)-(a.at||0));
   if(!list.length) return `<div class="empty" style="padding:26px"><div class="em">🌿</div>まだ記録がありません</div>`;
   return list.map(s=>{const sj=subj(s.subject);
+    const label=s.mode==='video'?'📺 動画':s.mode==='manual'?'✏️ 手動':s.mode==='pomo'?'🍅 ポモドーロ':'⏱️ 計測';
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
       <span class="tag" style="background:${sj.color}22;color:${sj.color}">${sj.name}</span>
-      <span style="flex:1;font-size:13px;color:var(--text-dim)">${s.mode==='pomo'?'🍅 ポモドーロ':s.mode==='manual'?'✏️ 手動':'⏱️ 計測'}</span>
+      <span style="flex:1;font-size:13px;color:var(--text-dim)">${label}</span>
       <b style="font-size:14px">${minToHM(s.min)}</b>
       <button class="task-x" style="opacity:.6" onclick="delSession('${s.id}')">✕</button>
     </div>`;}).join("");
 }
-function delSession(id){ S.sessions=S.sessions.filter(x=>x.id!==id); save(); renderTimer(); toast("記録を削除しました"); }
-function setTimerSubject(id){ timer.subject=id; document.getElementById("tSubj").textContent=subj(id).name;
-  document.querySelectorAll("#view-timer .chip").forEach(c=>c.classList.remove("active")); event.target.classList.add("active"); }
-function fmtClock(sec){ sec=Math.max(0,Math.round(sec)); return `${pad(Math.floor(sec/60))}:${pad(sec%60)}`; }
-function updateRing(){
-  const fg=document.getElementById("ringFg"); if(!fg) return;
-  const C=2*Math.PI*110; let frac;
-  if(timer.mode==="free") frac = (timer.elapsed%60)/60;
-  else frac = timer.total? (timer.total-timer.remain)/timer.total : 0;
-  fg.style.strokeDashoffset = C*(1-frac);
-}
-function toggleTimer(){
-  if(timer.running){ pauseTimer(); return; }
-  timer.running=true;
-  try{ if("Notification" in window && Notification.permission==="default") Notification.requestPermission(); }catch(e){}
-  timer.anchor=Date.now();                                   // real-clock anchor (accurate even in background)
-  timer.anchorVal = timer.mode==="free" ? timer.elapsed : timer.remain;
-  const b=document.getElementById("tPlay"); if(b)b.textContent="⏸";
-  timer.int=setInterval(tick,250);
-  tick();
-}
-function pauseTimer(){
-  timer.running=false; clearInterval(timer.int);
-  const b=document.getElementById("tPlay"); if(b)b.textContent="▶";
-  document.title="まなびログ — 学習管理";
-}
-function tick(){
-  const gone=(Date.now()-timer.anchor)/1000;                 // seconds since anchor, drift-free
-  if(timer.mode==="free"){
-    timer.elapsed=timer.anchorVal+gone;
-  }else{
-    timer.remain=timer.anchorVal-gone;
-    if(timer.remain<=0){
-      const overshoot=-timer.remain;                         // carry leftover into next phase
-      if(timer.phase==="focus"){
-        logSession(S.settings.pomoFocus,"pomo"); beep();
-        notify("🍅 集中おつかれさま！休憩しよう");
-        timer.phase="break"; timer.total=S.settings.pomoBreak*60;
-      }else{
-        beep(); notify("休憩おわり！次の集中へ 💪");
-        timer.phase="focus"; timer.total=S.settings.pomoFocus*60;
-      }
-      timer.remain=Math.max(0,timer.total-overshoot);
-      timer.anchor=Date.now(); timer.anchorVal=timer.total-overshoot;
-      const ph=document.getElementById("tPhase"); if(ph)ph.textContent=timer.phase==="focus"?"集中":"休憩";
-    }
-  }
-  const shown=timer.mode==="free"?timer.elapsed:timer.remain;
-  const disp=document.getElementById("tDisp"); if(disp)disp.textContent=fmtClock(shown);
-  if(timer.running) document.title=`${fmtClock(shown)} ${timer.mode==="pomo"?(timer.phase==="focus"?"集中":"休憩"):"計測"} — まなびログ`;
-  updateRing();
-}
-function notify(msg){
-  toast(msg);
-  try{ if("Notification" in window && Notification.permission==="granted") new Notification("まなびログ",{body:msg}); }catch(e){}
-}
-function resetTimer(){
-  pauseTimer();
-  if(timer.mode==="pomo"){ timer.phase="focus"; timer.total=S.settings.pomoFocus*60; timer.remain=timer.total; }
-  else { timer.elapsed=0; }
-  if(current==="timer") renderTimer();
-}
-function stopAndLog(){
-  pauseTimer();
-  let min=0;
-  if(timer.mode==="free") min=Math.round(timer.elapsed/60);
-  else if(timer.phase==="focus") min=Math.round((timer.total-timer.remain)/60);
-  if(min>=1){ logSession(min,timer.mode==="free"?"free":"pomo"); toast(`⏹ ${minToHM(min)}を記録しました`); }
-  else toast("1分未満は記録されません");
-  resetTimer();
-}
-function logSession(min,mode){
-  S.sessions.push({id:uid(),date:todayKey(),subject:timer.subject,min,mode,at:Date.now()});
-  bumpStreak(); save(); if(current==="timer") renderTimer();
-}
-function beep(){
-  try{ const a=new (window.AudioContext||window.webkitAudioContext)();
-    const o=a.createOscillator(),g=a.createGain(); o.connect(g);g.connect(a.destination);
-    o.frequency.value=880; o.type="sine"; g.gain.setValueAtTime(.001,a.currentTime);
-    g.gain.exponentialRampToValueAtTime(.3,a.currentTime+.02); g.gain.exponentialRampToValueAtTime(.001,a.currentTime+.5);
-    o.start(); o.stop(a.currentTime+.5);
-  }catch(e){}
-}
+function delSession(id){ S.sessions=S.sessions.filter(x=>x.id!==id); save(); if(current==="timer") renderStudyToday(); toast("記録を削除しました"); }
 
 /* ============================================================
    FocusTube — 作業用YouTube動画（タイマー画面に統合）
@@ -795,6 +732,7 @@ function ensureYTPlayer(cb){
   });
 }
 function ytOnState(e){
+  if(e.data===YT.PlayerState.PLAYING) startWatchClock(); else stopWatchClock();
   if(e.data===YT.PlayerState.PLAYING){
     try{ const m=yt.player.getVideoUrl().match(/[?&]v=([A-Za-z0-9_-]+)/);
       if(m){ const i=yt.list.findIndex(x=>x.id===m[1]); if(i!==-1&&i!==yt.idx){ yt.idx=i; yt.playingCtx=yt.ctx; updateYTPlaying(); } } }catch(_){}
@@ -1163,17 +1101,6 @@ function renderSettings(){
   const el=document.getElementById("view-settings");
   el.innerHTML=`
     <div class="card" style="margin-bottom:16px">
-      <div class="section-title">タイマー設定</div>
-      <div class="goal-row"><span class="lbl">集中時間（ポモドーロ）</span>
-        <div style="display:flex;gap:6px;align-items:center"><button class="btn sm" onclick="adjPomo('pomoFocus',-5)">−5</button>
-          <b style="min-width:48px;text-align:center">${S.settings.pomoFocus}分</b>
-          <button class="btn sm" onclick="adjPomo('pomoFocus',5)">+5</button></div></div>
-      <div class="goal-row" style="margin-top:10px"><span class="lbl">休憩時間</span>
-        <div style="display:flex;gap:6px;align-items:center"><button class="btn sm" onclick="adjPomo('pomoBreak',-1)">−1</button>
-          <b style="min-width:48px;text-align:center">${S.settings.pomoBreak}分</b>
-          <button class="btn sm" onclick="adjPomo('pomoBreak',1)">+1</button></div></div>
-    </div>
-    <div class="card" style="margin-bottom:16px">
       <div class="section-title">表示</div>
       <div class="goal-row"><span class="lbl">ダークモード</span>
         <button class="btn sm ${S.theme==='dark'?'primary':''}" onclick="S.theme=S.theme==='dark'?'light':'dark';save();applyTheme();renderSettings()">${S.theme==='dark'?'オン':'オフ'}</button></div>
@@ -1201,8 +1128,6 @@ function renderSettings(){
       </div>
     </div>`;
 }
-function adjPomo(k,d){ S.settings[k]=Math.max(1,S.settings[k]+d); save();
-  if(!timer.running){ resetTimer(); } renderSettings(); }
 function exportData(){
   const blob=new Blob([JSON.stringify(S,null,2)],{type:"application/json"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
@@ -1261,7 +1186,7 @@ function seedSample(){
   ];
   S.sessions=[];
   const sample=[[-6,["math",40],["eng",25]],[-5,["sci",50]],[-4,["math",30],["soc",20]],[-3,["eng",45]],[-2,["math",60],["kokugo",30]],[-1,["sci",35],["eng",25]],[0,["math",25]]];
-  sample.forEach(([off,...ss])=>ss.forEach(([sub,min])=>S.sessions.push({id:uid(),date:k(off),subject:sub,min,mode:"pomo",at:Date.now()})));
+  sample.forEach(([off,...ss])=>ss.forEach(([sub,min])=>S.sessions.push({id:uid(),date:k(off),subject:sub,min,sec:min*60,mode:"video",at:Date.now()})));
   S.streak={last:todayKey(),count:3};
   save();
 }
