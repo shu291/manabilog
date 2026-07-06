@@ -136,7 +136,7 @@ input,select,textarea{font-family:inherit;font-size:16px}
 
 /* ===== FocusTube (作業用動画) ===== */
 .yt-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  box-shadow:var(--shadow);margin-top:16px;overflow:hidden}
+  box-shadow:var(--shadow);overflow:hidden}
 .yt-head{display:flex;align-items:center;gap:10px;padding:16px 18px 12px}
 .yt-head .t{font-weight:800;font-size:15px;display:flex;align-items:center;gap:8px}
 .yt-head .hint{font-size:12px;color:var(--text-dim);margin-left:auto;text-align:right}
@@ -634,13 +634,13 @@ let lastDashMin = -1;
 function renderStudy(){
   const view=document.getElementById("view-timer");
   if(!document.getElementById("timerZone")){
-    view.innerHTML='<div id="timerZone"></div><div id="ytZone"></div>';
+    view.innerHTML='<div id="ytZone"></div><div id="timerZone"></div>';   // 動画を一番上に
     initYTPanel();                       // 動画パネルは一度だけ構築（プレーヤーを保持）
   }
   const el=document.getElementById("timerZone");
   const m=minutesOn(todayKey());
   el.innerHTML=`
-    <div class="card">
+    <div class="card" style="margin-top:16px">
       <div style="text-align:center">
         <div style="font-size:13px;color:var(--text-dim);font-weight:700">今日の勉強時間</div>
         <div id="studyClock" style="font-size:46px;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:2px 0">${minToHM(m)||'0分'}</div>
@@ -653,7 +653,7 @@ function renderStudy(){
         </div>
       </div>
       <div style="margin-top:16px;font-size:12.5px;color:var(--text-dim);background:var(--surface-2);padding:11px 14px;border-radius:12px;line-height:1.7">
-        💡 下の動画を再生している間、選んだ教科に<b>自動で勉強時間が記録</b>されます。
+        💡 上の動画を再生している間、選んだ教科に<b>自動で勉強時間が記録</b>されます。
       </div>
       <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:10px" onclick="openLogModal()">✏️ 動画なしの分を手動で追加</button>
     </div>
