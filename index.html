@@ -348,7 +348,11 @@ function load(){
       videos:{playlists:[],favs:[],history:[],...(d.videos||{})}};
   }catch(e){ return structuredClone(DEFAULT); }
 }
-function save(){ localStorage.setItem("manabilog", JSON.stringify(S)); }
+function save(){
+  if(!applyingRemote) S.updatedAt=Date.now();          // ローカル変更のみ時刻更新（同期ループ防止）
+  localStorage.setItem("manabilog", JSON.stringify(S));
+  scheduleCloudPush();
+}
 
 /* ---------- Date helpers ---------- */
 const pad = n => String(n).padStart(2,"0");
@@ -1120,9 +1124,38 @@ function heatmap(){
 }
 
 /* ---------- Settings ---------- */
+function accountCard(){
+  if(!cloudEnabled){
+    return `<div class="card" style="margin-bottom:16px">
+      <div class="section-title">☁️ クラウド同期</div>
+      <p style="font-size:13px;color:var(--text-dim);line-height:1.8">まだ未設定です。設定すると<b>ログインしてどの端末でもデータを引き継げ、機種変更でも消えなくなります</b>。<br>設定方法はアプリのREADME（GitHub）を参照してください。</p>
+    </div>`;
+  }
+  if(cloudUser){
+    return `<div class="card" style="margin-bottom:16px">
+      <div class="section-title">☁️ クラウド同期 <span class="badge" id="syncStatus">✅ 同期済み</span></div>
+      <div class="goal-row"><span class="lbl" style="word-break:break-all">${esc(cloudUser.email||"ログイン中")}</span>
+        <button class="btn sm" onclick="cloudLogout()">ログアウト</button></div>
+      <p style="font-size:12px;color:var(--text-dim);margin-top:8px">データは自動でクラウドに保存され、他の端末でも同じアカウントでログインすれば引き継げます。</p>
+    </div>`;
+  }
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="section-title">☁️ クラウド同期（ログイン）</div>
+    <p style="font-size:12.5px;color:var(--text-dim);margin-bottom:12px;line-height:1.7">ログインすると、どの端末でもデータを引き継げ、機種変更でも消えません。初めての方は「新規登録」から。</p>
+    <div class="field"><label>メールアドレス</label><input id="cl-email" type="email" inputmode="email" autocomplete="username" placeholder="you@example.com"></div>
+    <div class="field"><label>パスワード（6文字以上）</label><input id="cl-pass" type="password" autocomplete="current-password" placeholder="••••••"></div>
+    <div id="cl-err" style="display:none;color:var(--danger);font-size:12.5px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn" style="flex:1;justify-content:center" onclick="cloudSignup()">新規登録</button>
+      <button class="btn primary" style="flex:1;justify-content:center" onclick="cloudLogin()">ログイン</button>
+    </div>
+    <button class="btn ghost sm" style="width:100%;justify-content:center;margin-top:8px" onclick="cloudReset()">パスワードを忘れた</button>
+  </div>`;
+}
 function renderSettings(){
   const el=document.getElementById("view-settings");
   el.innerHTML=`
+    ${accountCard()}
     <div class="card" style="margin-bottom:16px">
       <div class="section-title">表示</div>
       <div class="goal-row"><span class="lbl">ダークモード</span>
@@ -1198,12 +1231,130 @@ function confirmModal(title,msg,onOk,danger){
 function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); }
 function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+/* ============================================================
+   クラウド同期（Firebase / メール＋パスワード・無料枠）
+   ※ 下のFIREBASE_CONFIGを設定するまではローカルのみで動作します
+   ============================================================ */
+const FIREBASE_CONFIG = {
+  // ▼▼▼ Firebaseコンソールの firebaseConfig をここに貼り付け ▼▼▼
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  appId: ""
+  // ▲▲▲ ここまで ▲▲▲
+};
+const cloudEnabled = !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
+let fbAuth=null, fbDb=null, cloudUser=null, cloudUnsub=null, applyingRemote=false, pushTimer=null;
+
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+async function initCloud(){
+  try{
+    const B="https://www.gstatic.com/firebasejs/10.12.2/";
+    await loadScript(B+"firebase-app-compat.js");
+    await loadScript(B+"firebase-auth-compat.js");
+    await loadScript(B+"firebase-firestore-compat.js");
+    firebase.initializeApp(FIREBASE_CONFIG);
+    fbAuth=firebase.auth(); fbDb=firebase.firestore();
+    try{ await fbDb.enablePersistence({synchronizeTabs:true}); }catch(_){}
+    fbAuth.onAuthStateChanged(u=>{
+      cloudUser=u;
+      if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
+      if(u) startSync(u.uid);
+      if(current==="settings") renderSettings();
+    });
+  }catch(e){ console.warn("cloud init failed", e); }
+}
+async function startSync(uid){
+  const ref=fbDb.collection("users").doc(uid);
+  setSyncStatus("同期中…");
+  try{
+    const snap=await ref.get();
+    if(snap.exists && snap.data().state){
+      const merged=mergeState(S, snap.data().state);  // 端末とクラウドを統合（データを失わない）
+      applyingRemote=true; S=merged; localStorage.setItem("manabilog",JSON.stringify(S)); applyingRemote=false;
+    }
+    await ref.set({state:S, updatedAt:S.updatedAt||Date.now()},{merge:true});
+    applyTheme(); if(current) render(current); setSyncStatus("✅ 同期済み");
+    cloudUnsub=ref.onSnapshot(doc=>{                   // 他の端末の変更をリアルタイム反映
+      if(!doc.exists) return; const d=doc.data(); if(!d||!d.state) return;
+      if((d.updatedAt||0) > (S.updatedAt||0)){
+        applyingRemote=true; S=mergeState(S,d.state); localStorage.setItem("manabilog",JSON.stringify(S)); applyingRemote=false;
+        applyTheme(); if(current) render(current);
+      }
+    });
+  }catch(e){ setSyncStatus("⚠️ 同期エラー"); console.warn(e); }
+}
+function scheduleCloudPush(){
+  if(applyingRemote || !cloudUser || !fbDb) return;
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(()=>{                            // 書き込みは2.5秒デバウンス（無料枠節約）
+    fbDb.collection("users").doc(cloudUser.uid).set({state:S, updatedAt:S.updatedAt||Date.now()},{merge:true})
+      .then(()=>setSyncStatus("✅ 同期済み")).catch(()=>setSyncStatus("⚠️ 未同期"));
+  },2500);
+}
+function setSyncStatus(t){ const el=document.getElementById("syncStatus"); if(el) el.textContent=t; }
+function uniqById(...arrs){ const map=new Map(); arrs.flat().forEach(x=>{ if(x&&x.id!=null&&!map.has(x.id)) map.set(x.id,x); }); return [...map.values()]; }
+function mergeState(a,b){
+  if(!b) return a; if(!a) return b;
+  const base=(b.updatedAt||0)>(a.updatedAt||0)?b:a, other=base===a?b:a;   // スカラーは新しい方
+  const m=structuredClone(base);
+  m.tasks=uniqById(base.tasks,other.tasks);              // 配列は両端末の和集合＝消えない
+  m.sessions=uniqById(base.sessions,other.sessions);
+  const bv=base.videos||{}, ov=other.videos||{};
+  m.videos={
+    playlists:uniqById(bv.playlists,ov.playlists),
+    favs:uniqById(bv.favs,ov.favs),
+    history:uniqById(bv.history,ov.history)
+  };
+  const sa=a.streak||{count:0}, sb=b.streak||{count:0};
+  m.streak=(sb.count||0)>=(sa.count||0)?sb:sa;           // 連続日数は大きい方
+  m.updatedAt=Math.max(a.updatedAt||0,b.updatedAt||0);
+  return {...structuredClone(DEFAULT), ...m,
+    goals:{...DEFAULT.goals,...(m.goals||{})},
+    settings:{...DEFAULT.settings,...(m.settings||{})},
+    videos:{playlists:[],favs:[],history:[],...(m.videos||{})}};
+}
+/* --- 認証操作 --- */
+function cloudSignup(){
+  const em=(document.getElementById("cl-email").value||"").trim(), pw=document.getElementById("cl-pass").value||"";
+  if(!em){ cloudErr("メールアドレスを入力してください"); return; }
+  if(pw.length<6){ cloudErr("パスワードは6文字以上にしてください"); return; }
+  cloudErr(""); fbAuth.createUserWithEmailAndPassword(em,pw).then(()=>toast("アカウントを作成しました")).catch(e=>cloudErr(authErrMsg(e)));
+}
+function cloudLogin(){
+  const em=(document.getElementById("cl-email").value||"").trim(), pw=document.getElementById("cl-pass").value||"";
+  if(!em||!pw){ cloudErr("メールとパスワードを入力してください"); return; }
+  cloudErr(""); fbAuth.signInWithEmailAndPassword(em,pw).then(()=>toast("ログインしました")).catch(e=>cloudErr(authErrMsg(e)));
+}
+function cloudLogout(){
+  confirmModal("ログアウトしますか？","データはクラウドに保存済みです。またログインすれば戻せます。",()=>{
+    if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
+    fbAuth.signOut().then(()=>{ toast("ログアウトしました"); if(current==="settings") renderSettings(); });
+  });
+}
+function cloudReset(){
+  const em=(document.getElementById("cl-email").value||"").trim();
+  if(!em){ cloudErr("メールアドレスを入力してから押してください"); return; }
+  fbAuth.sendPasswordResetEmail(em).then(()=>toast("再設定メールを送りました")).catch(e=>cloudErr(authErrMsg(e)));
+}
+function cloudErr(msg){ const e=document.getElementById("cl-err"); if(e){ e.textContent=msg; e.style.display=msg?"block":"none"; } }
+function authErrMsg(e){ const c=(e&&e.code)||"";
+  if(c.includes("email-already-in-use")) return "このメールは登録済みです。ログインしてください";
+  if(c.includes("invalid-credential")||c.includes("wrong-password")||c.includes("user-not-found")) return "メールかパスワードが違います";
+  if(c.includes("weak-password")) return "パスワードは6文字以上にしてください";
+  if(c.includes("invalid-email")) return "メールアドレスの形式が正しくありません";
+  if(c.includes("too-many-requests")) return "試行が多すぎます。少し待って再度お試しください";
+  if(c.includes("network")) return "ネットワークエラー。接続を確認してください";
+  return "エラー: "+((e&&e.message)||c);
+}
+
 /* ---------- Boot ---------- */
 applyTheme();
 if(S.tasks.length===0 && S.sessions.length===0 && !localStorage.getItem("manabilog_seeded")){
   seedSample();
 }
 nav("dash");
+if(cloudEnabled) initCloud();
 
 function seedSample(){
   localStorage.setItem("manabilog_seeded","1");

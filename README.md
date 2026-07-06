@@ -26,13 +26,41 @@ open index.html          # もしくは python3 -m http.server 8099
 
 ## 🔒 データについて
 
-すべてのデータは**あなたの端末のブラウザ内（localStorage）だけ**に保存されます。サーバーには何も送信されません。
-機種変更の前は「設定 → データを書き出す」でバックアップしておきましょう。
+初期状態ではすべてのデータは**あなたの端末のブラウザ内（localStorage）だけ**に保存されます。
+下記の「クラウド同期」を設定すれば、ログインして複数端末で同じデータを使え、機種変更でも消えません（未設定でもバックアップは「設定 → データを書き出す」で可能）。
+
+## ☁️ クラウド同期（ログイン）を有効にする — 任意・無料
+
+未設定のままでも「端末内保存」で完全に動きます。設定すると **メール＋パスワードでログインし、どの端末でもデータを引き継げ、機種変更でも消えなくなります**（Firebase 無料枠・クレジットカード不要）。
+
+### 手順（約5分）
+
+1. [Firebase コンソール](https://console.firebase.google.com/) を開き **「プロジェクトを追加」**（名前は `manabilog` など。Google アナリティクスは「オフ」でOK）
+2. 左メニュー **Authentication → 始める → 「メール/パスワード」を有効にする → 保存**
+3. 左メニュー **Firestore Database → データベースの作成 → 本番環境モード → ロケーション `asia-northeast1`（東京）**
+4. Firestore の **「ルール」タブ** を下記に置き換えて **公開**：
+
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /users/{uid} {
+         allow read, write: if request.auth != null && request.auth.uid == uid;
+       }
+     }
+   }
+   ```
+
+5. 歯車 **⚙️ → プロジェクトの設定 → 「マイアプリ」→ ウェブ `</>`** を選び、アプリ登録（ホスティングは不要）。表示される `firebaseConfig` の中身をコピー
+6. `index.html` 内の `const FIREBASE_CONFIG = { ... }` に **apiKey / authDomain / projectId / appId** を貼り付けて保存 → `git commit` → `git push`
+7. 数分後、公開ページの **設定 → クラウド同期** に「メール／パスワード」欄が出れば成功。新規登録 → ログインで同期開始
+
+> 🔒 `firebaseConfig` は公開して問題ない情報です（Firebase の仕様）。データは上記ルールにより **本人しか読み書きできません**。
 
 ## 🛠 技術
 
 - 単一 HTML / CSS / Vanilla JavaScript（依存ゼロ）
-- localStorage による永続化
+- localStorage による端末内保存 ＋ 任意で Firebase（Auth + Firestore）クラウド同期
 - レスポンシブ（PC・スマホ対応）、ライト／ダークテーマ
 
 ---
