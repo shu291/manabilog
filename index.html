@@ -295,6 +295,7 @@ input,select,textarea{font-family:inherit;font-size:16px}
   <button class="active" data-nav="dash"><span class="ic">🏠</span>ホーム</button>
   <button data-nav="tasks"><span class="ic">✅</span>課題</button>
   <button data-nav="timer"><span class="ic">📺</span>勉強</button>
+  <button data-nav="goals"><span class="ic">🎯</span>目標</button>
   <button data-nav="stats"><span class="ic">📊</span>統計</button>
   <button data-nav="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
@@ -329,7 +330,7 @@ const QUOTES = [
 const DEFAULT = {
   tasks:[], sessions:[], theme:"light",
   goals:{ weeklyMin:600, bySubject:{} },
-  settings:{ pomoFocus:25, pomoBreak:5 },
+  settings:{},
   streak:{ last:null, count:0 },
   videos:{ playlists:[], favs:[], history:[] }
 };
@@ -595,7 +596,7 @@ function openTaskModal(id){
     <div class="field"><label>メモ（任意）</label>
       <textarea id="f-note" rows="2" placeholder="ページ数・範囲・注意点など">${esc(t.note||"")}</textarea></div>
     <div class="modal-actions">
-      ${editing?`<button class="btn danger" onclick="delTask('${id}');closeModal()">削除</button>`:""}
+      ${editing?`<button class="btn danger" onclick="delTask('${id}')">削除</button>`:""}
       <button class="btn" onclick="closeModal()">キャンセル</button>
       <button class="btn primary" onclick="saveTask('${id||''}')">保存</button>
     </div>`);
@@ -625,7 +626,6 @@ function saveTask(id){
 }
 
 /* ---------- Timer ---------- */
-let timer={running:false,mode:"pomo",phase:"focus",remain:25*60,total:25*60,subject:"math",int:null,elapsed:0};
 /* 勉強画面：動画を再生している間、選んだ教科に自動で勉強時間を記録（FocusTube方式） */
 let studySubject = localStorage.getItem("manabilog_studysubj") || "math";
 let manualOn=false, videoPlaying=false, recInt=null, recAnchor=0, lastShownMin=-1;
@@ -675,13 +675,18 @@ function renderStudyToday(){
 }
 function renderRecBtn(){
   const b=document.getElementById("recBtn"); if(!b) return;
-  if(manualOn){ b.textContent="⏹ 記録を止める"; b.classList.remove("primary"); b.style.background="var(--danger)"; b.style.color="#fff"; }
+  if(recInt){ b.textContent="⏹ 記録を止める"; b.classList.remove("primary"); b.style.background="var(--danger)"; b.style.color="#fff"; }
   else { b.textContent="▶ 勉強スタート"; b.classList.add("primary"); b.style.background=""; b.style.color=""; }
 }
 /* --- 記録エンジン：手動ボタン or 動画再生中に加算（重複しない単一クロック） --- */
 function toggleManual(){
-  manualOn=!manualOn; renderRecBtn(); syncRecording();
-  toast(manualOn?"⏺ 記録を始めました":"⏹ 記録を止めました");
+  if(recInt){                                    // 記録中（手動でも動画でも）→ 完全に停止
+    manualOn=false; videoPlaying=false;
+    try{ if(yt.player && yt.player.pauseVideo) yt.player.pauseVideo(); }catch(e){}
+    syncRecording(); toast("⏹ 記録を止めました");
+  }else{
+    manualOn=true; syncRecording(); toast("⏺ 記録を始めました");
+  }
 }
 function setVideoPlaying(on){ videoPlaying=on; syncRecording(); }
 function syncRecording(){
@@ -689,8 +694,13 @@ function syncRecording(){
   if(should && !recInt){ recAnchor=Date.now(); recInt=setInterval(flushRec,1000); }
   else if(!should && recInt){ flushRec(); clearInterval(recInt); recInt=null; }
   const ws=document.getElementById("watchState"); if(ws) ws.textContent = recInt?"🔴 記録中":"● 停止中";
+  renderRecBtn();                                 // ボタン表示を実際の記録状態に同期
 }
-function flushRec(){ const now=Date.now(); const sec=(now-recAnchor)/1000; recAnchor=now; if(sec>0) addWatch(sec); }
+function flushRec(){
+  const now=Date.now(); let sec=(now-recAnchor)/1000; recAnchor=now;
+  if(sec>90) sec=90;                              // スリープ/離席の水増し防止（1回の上限90秒）
+  if(sec>0) addWatch(sec);
+}
 function addWatch(sec){
   const k=todayKey();
   let s=S.sessions.find(x=>x.date===k && x.subject===studySubject && x.mode==="study");
@@ -1153,6 +1163,9 @@ function importData(e){
     if(!d.tasks&&!d.sessions) throw 0;
     confirmModal("データを読み込みますか？","現在のデータは上書きされます。",()=>{
       S={...structuredClone(DEFAULT),...d};
+      S.goals={...DEFAULT.goals,...(d.goals||{})};        // 部分的なファイルでも壊れないよう深くマージ
+      S.settings={...DEFAULT.settings,...(d.settings||{})};
+      S.streak={...DEFAULT.streak,...(d.streak||{})};
       S.videos={playlists:[],favs:[],history:[],...(d.videos||{})};
       save(); applyTheme(); nav("dash"); toast("読み込みました");
     });
@@ -1161,7 +1174,12 @@ function importData(e){
 }
 function resetAll(){
   confirmModal("本当にすべて削除しますか？","課題・記録・目標がすべて消えます。この操作は取り消せません。",()=>{
-    S=structuredClone(DEFAULT); save(); applyTheme(); nav("dash"); toast("初期化しました");
+    S=structuredClone(DEFAULT); save();
+    ["manabilog_ytkey","manabilog_studysubj"].forEach(k=>localStorage.removeItem(k));
+    Object.keys(localStorage).filter(k=>k.startsWith("manabilog_ytcache_")).forEach(k=>localStorage.removeItem(k));
+    ytKey=""; studySubject="math"; manualOn=false; videoPlaying=false; if(recInt){clearInterval(recInt);recInt=null;}
+    const vt=document.getElementById("view-timer"); if(vt) vt.innerHTML="";   // 動画パネルも作り直す
+    applyTheme(); nav("dash"); toast("初期化しました");
   },true);
 }
 
